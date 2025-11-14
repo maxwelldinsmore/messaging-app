@@ -1,0 +1,11 @@
+# Server Configuration
+PORT=5000
+
+# AWS Configuration
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_SQS_QUEUE_URL=
+
+# Example Queue URL format:
+# AWS_SQS_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123456789012/your-queue-name
