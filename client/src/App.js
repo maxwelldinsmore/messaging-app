@@ -70,10 +70,34 @@ function App() {
   return (
     <div className="App">
       <div className="messaging-container">
-        <h1>📨 Send a Message</h1>
-        <p className="subtitle">Your message will be sent to Amazon SQS</p>
-        
-        <form onSubmit={handleSubmit} className="message-form">
+        <div className="chat-container">
+          <div className="chat-header">
+            <h2>💬 Conversation</h2>
+            <p className="message-count">{messages.length} message{messages.length !== 1 ? 's' : ''}</p>
+          </div>
+          <div className="chat-messages">
+            {messages.map((msg) => (
+              <div key={msg.id} className={`chat-message ${msg.isSent ? 'sent' : 'received'}`}>
+                <div className="message-bubble">
+                  <div className="bubble-header">
+                    <span className="bubble-name">{msg.name}</span>
+                    <span className="bubble-time">
+                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                  <div className="bubble-content">
+                    {msg.message}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="form-container">
+          <h1>📨 Send a Message</h1>
+          <p className="subtitle">Your message will be sent to Amazon SQS</p>
+          
+          <form onSubmit={handleSubmit} className="message-form">
           <div className="form-group">
             <label htmlFor="name">Your Name</label>
             <input
@@ -109,37 +133,12 @@ function App() {
           </button>
         </form>
 
-        {messages.length > 0 && (
-          <div className="chat-container">
-            <div className="chat-header">
-              <h2>� Conversation</h2>
-              <p className="message-count">{messages.length} message{messages.length !== 1 ? 's' : ''}</p>
-            </div>
-            <div className="chat-messages">
-              {messages.map((msg) => (
-                <div key={msg.id} className={`chat-message ${msg.isSent ? 'sent' : 'received'}`}>
-                  <div className="message-bubble">
-                    <div className="bubble-header">
-                      <span className="bubble-name">{msg.name}</span>
-                      <span className="bubble-time">
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-                    <div className="bubble-content">
-                      {msg.message}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {status && (
           <div className={`status-message ${status.includes('✓') ? 'success' : 'error'}`}>
             {status}
           </div>
         )}
+        </div>
       </div>
     </div>
   );
