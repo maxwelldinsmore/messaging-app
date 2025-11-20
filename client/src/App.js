@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './App.css';
 
 function App() {
@@ -7,6 +7,56 @@ function App() {
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState([]);
+  const messagesEndRef = React.useRef(null);
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Poll for messages from server
+  useEffect(() => {
+    const processedMessageIds = new Set();
+    
+    const pollMessages = async () => {
+      console.log('🔄 Polling server for messages...');
+      try {
+        console.log('🌐 Fetching from: /api/messages');
+        const response = await fetch('/api/messages');
+        console.log('📥 Response status:', response.status);
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log('📦 Received data:', data);
+          
+          if (data.messages && Array.isArray(data.messages)) {
+            console.log(`📨 Found ${data.messages.length} messages from server`);
+            
+            // Replace all messages with server's version
+            setMessages(data.messages);
+          } else {
+            console.log('ℹ️ No messages in response or not an array');
+          }
+        } else {
+          console.error('❌ Response not OK:', response.status, response.statusText);
+        }
+      } catch (error) {
+        console.error('❌ Error polling messages:', error);
+      }
+    };
+
+    // Poll every 3 seconds
+    console.log('⏰ Setting up polling interval (3 seconds)');
+    const interval = setInterval(pollMessages, 3000);
+    
+    // Initial poll
+    pollMessages();
+
+    return () => {
+      console.log('🛑 Clearing polling interval');
+      clearInterval(interval);
+    };
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -45,18 +95,6 @@ function App() {
         setMessages(prev => [...prev, newMessage]);
         setStatus('✓ Message sent successfully!');
         setMessage('');
-        
-        // Simulate receiving a message after 2 seconds
-        setTimeout(() => {
-          const receivedMessage = {
-            id: Date.now() + 1,
-            name: 'Server',
-            message: 'Message received and queued in SQS!',
-            timestamp: new Date().toISOString(),
-            isSent: false, // Mark as received message
-          };
-          setMessages(prev => [...prev, receivedMessage]);
-        }, 2000);
       } else {
         setStatus(`✗ Error: ${data.error || 'Failed to send message'}`);
       }
@@ -91,6 +129,7 @@ function App() {
                 </div>
               </div>
             ))}
+            <div ref={messagesEndRef} />
           </div>
         </div>
         <div className="form-container">

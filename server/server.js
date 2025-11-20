@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
+const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -10,8 +10,8 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Initialize AWS SQS Client
-const sqsClient = new SQSClient({
+// Initialize AWS SNS Client
+const sns = new SNSClient({
   region: process.env.AWS_REGION || 'us-east-1',
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -20,11 +20,100 @@ const sqsClient = new SQSClient({
   },
 });
 
-const QUEUE_URL = process.env.AWS_SQS_QUEUE_URL;
+const TOPIC_ARN = process.env.SNS_TOPIC_ARN;
+const FUNCTION_URL = process.env.FUNCTION_URL;
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Server is running' });
+// Store messages in memory
+let messagesCache = [];
+let lastPollTime = Date.now();
+
+// Poll Lambda function for messages
+const pollLambdaMessages = async () => {
+  console.log('🔄 Polling Lambda for messages...');
+  try {
+    if (!FUNCTION_URL) {
+      console.warn('⚠️ FUNCTION_URL not configured');
+      return;
+    }
+
+    console.log('🌐 Fetching from:', FUNCTION_URL);
+    const response = await fetch(FUNCTION_URL);
+    console.log('📥 Response status:', response.status);
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log('📦 Received data:', JSON.stringify(data, null, 2));
+      console.log('📦 Data type:', typeof data);
+      console.log('📦 Is Array:', Array.isArray(data));
+      console.log('📦 Has messages property:', !!data.messages);
+      
+      // Handle both formats: {messages: [...]} or just [...]
+      let messagesArray = [];
+      if (Array.isArray(data)) {
+        messagesArray = data;
+        console.log('📨 Data is directly an array with', messagesArray.length, 'items');
+      } else if (data.messages && Array.isArray(data.messages)) {
+        messagesArray = data.messages;
+        console.log(`📨 Found ${messagesArray.length} messages in data.messages`);
+      } else {
+        console.log('⚠️ Data is not in expected format');
+      }
+      
+      if (messagesArray.length > 0) {
+        // Add new messages to cache
+        messagesArray.forEach((msg) => {
+          console.log('🔍 Processing raw message:', JSON.stringify(msg, null, 2));
+          
+          // Parse the Message field if it's a JSON string (SNS notification format)
+          let parsedMessage = msg;
+          if (msg.Message && typeof msg.Message === 'string') {
+            try {
+              parsedMessage = JSON.parse(msg.Message);
+              parsedMessage.MessageId = msg.MessageId;
+              parsedMessage.Timestamp = msg.Timestamp;
+              console.log('✂️ Parsed SNS message:', parsedMessage);
+            } catch (e) {
+              console.error('Failed to parse message:', e);
+            }
+          }
+          
+          const messageId = parsedMessage.MessageId || parsedMessage.id || `${parsedMessage.timestamp}-${parsedMessage.name}`;
+          const exists = messagesCache.some(m => m.id === messageId);
+          
+          console.log('🆔 Message ID:', messageId, '| Already exists:', exists);
+          
+          if (!exists) {
+            const newCacheMessage = {
+              id: messageId,
+              name: parsedMessage.name,
+              message: parsedMessage.message,
+              timestamp: parsedMessage.timestamp || parsedMessage.Timestamp,
+              isSent: false,
+            };
+            console.log('✅ Adding new message to cache:', newCacheMessage);
+            messagesCache.push(newCacheMessage);
+            console.log('📊 Cache now has', messagesCache.length, 'messages');
+          }
+        });
+      } else {
+        console.log('ℹ️ No messages to process');
+      }
+    } else {
+      console.error('❌ Response not OK:', response.status);
+    }
+  } catch (error) {
+    console.error('❌ Error polling Lambda:', error);
+  }
+};
+
+// Start polling interval
+setInterval(pollLambdaMessages, 5000);
+pollLambdaMessages(); // Initial poll
+
+// Get messages endpoint
+app.get('/api/messages', (req, res) => {
+  console.log(`📤 Sending ${messagesCache.length} messages to client`);
+  res.json({ messages: messagesCache });
 });
 
 // Send message endpoint
@@ -39,56 +128,58 @@ app.post('/api/send-message', async (req, res) => {
       });
     }
 
-    if (!QUEUE_URL) {
+    if (!TOPIC_ARN) {
       return res.status(500).json({ 
-        error: 'SQS Queue URL not configured' 
+        error: 'SNS Topic ARN not configured' 
       });
     }
 
-    // Prepare message for SQS
+    console.log('📍 Topic ARN:', TOPIC_ARN);
+
+    // Fix the Topic ARN if it has the subscription UUID appended
+    let fixedTopicArn = TOPIC_ARN;
+    if (TOPIC_ARN.includes('.fifo:')) {
+      fixedTopicArn = TOPIC_ARN.split(':').slice(0, 6).join(':');
+      console.log('🔧 Fixed Topic ARN:', fixedTopicArn);
+    }
+
+    // Prepare message for SNS
     const messageBody = {
       name,
       message,
       timestamp: timestamp || new Date().toISOString(),
     };
 
-    // Send message to SQS
-    const isFifoQueue = QUEUE_URL.endsWith('.fifo');
-    const sqsParams = {
-      QueueUrl: QUEUE_URL,
-      MessageBody: JSON.stringify(messageBody),
-      MessageAttributes: {
-        Name: {
-          DataType: 'String',
-          StringValue: name,
-        },
-        Timestamp: {
-          DataType: 'String',
-          StringValue: messageBody.timestamp,
-        },
-      },
+    // Check if FIFO topic
+    const isFifoTopic = fixedTopicArn.endsWith('.fifo');
+    
+    const publishParams = {
+      TopicArn: fixedTopicArn,
+      Message: JSON.stringify(messageBody),
     };
 
-    // Add required parameters for FIFO queues
-    if (isFifoQueue) {
-      sqsParams.MessageGroupId = 'messaging-app-group';
-      sqsParams.MessageDeduplicationId = `${Date.now()}-${Math.random()}`;
+    // Add required parameters for FIFO topics
+    if (isFifoTopic) {
+      publishParams.MessageGroupId = 'messaging-app-group';
+      publishParams.MessageDeduplicationId = `${Date.now()}-${Math.random()}`;
+      console.log('📨 FIFO topic detected, adding required parameters');
     }
 
-    const command = new SendMessageCommand(sqsParams);
+    console.log('📤 Publishing to SNS with params:', { ...publishParams, Message: 'redacted' });
 
-    const response = await sqsClient.send(command);
+    // Send message to SNS
+    const snsResponse = await sns.send(new PublishCommand(publishParams));
 
-    console.log('Message sent to SQS:', {
-      messageId: response.MessageId,
+    console.log('Message sent to SNS:', {
+      messageId: snsResponse.MessageId,
       name,
       timestamp: messageBody.timestamp,
     });
 
     res.json({
       success: true,
-      messageId: response.MessageId,
-      message: 'Message sent successfully to SQS',
+      messageId: snsResponse.MessageId,
+      message: 'Message sent successfully to SNS',
     });
 
   } catch (error) {
@@ -113,5 +204,7 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`AWS Region: ${process.env.AWS_REGION || 'us-east-1'}`);
-  console.log(`SQS Queue URL configured: ${!!QUEUE_URL}`);
+  console.log(`SNS Topic ARN configured: ${!!TOPIC_ARN}`);
+  console.log(`Lambda Function URL configured: ${!!FUNCTION_URL}`);
+  console.log(`⏰ Polling Lambda every 5 seconds`);
 });
