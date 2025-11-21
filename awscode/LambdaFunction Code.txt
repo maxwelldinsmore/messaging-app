@@ -1,0 +1,58 @@
+import { SQSClient, SendMessageCommand, ReceiveMessageCommand } from "@aws-sdk/client-sqs";
+
+const sqs = new SQSClient({ region: "us-east-1" }); // change region if needed
+const QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/579749734588/MessagueQueue.fifo";
+export const handler = async (event) => {
+  const method = event.requestContext.http.method;
+  try {
+    // --- POST → Send to SQS ---
+    if (method === "POST") {
+      const body = JSON.parse(event.body);
+     const { name, message, timestamp } = body;
+      const messageBody = {
+        name,
+        message,
+        timestamp: timestamp || new Date().toISOString(),
+      };
+      await sqs.send(
+        new SendMessageCommand({
+          QueueUrl: QUEUE_URL,
+          MessageBody: JSON.stringify(messageBody),
+        })
+      );
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ok: true }),
+      };
+    }
+    // --- GET → Read messages from SQS ---
+    if (method === "GET") {
+      const response = await sqs.send(
+        new ReceiveMessageCommand({
+          QueueUrl: QUEUE_URL,
+          MaxNumberOfMessages: 10,  // read up to 10 messages
+          WaitTimeSeconds: 0,       // no long polling
+          VisibilityTimeout: 0,     // do NOT hide messages after read
+        })
+      );
+      const messages =
+        response.Messages?.map((msg) => JSON.parse(msg.Body)) || [];
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(messages),
+      };
+    }
+    return {
+      statusCode: 405,
+      body: "Method Not Allowed",
+    };
+  } catch (err) {
+    console.error(err);
+    return {
+      statusCode: 500,
+      body: "Server error",
+    };
+  }
+};

@@ -1,0 +1,31 @@
+{
+    "Version": "2012-10-17",
+    "Id": "   default_policy_ID",
+    "Statement": [
+    {
+        "Sid": "   owner_statement",
+        "Effect": "Allow",
+        "Principal": {
+            "AWS": "arn: aws: iam: : 579749734588 : root"
+            },
+            {
+            "Action": "SQS: *",
+            "Resource": "arn:aws:sqs:us-east-1:579749734588:MessagueQueue.fifo"
+            },
+            {
+            "Sid": "topic-subscription-arn:aws:sns:us-east-1:579749734588:chat-messages.fifo",
+            "Effect": "Allow",
+            "Principal":{
+                "Service": "sns. amazonaws.com"
+                },
+                "Action": "SQS:SendMessage",
+                "Resource": "arn:aws:sqs:us-east-1:579749734588:MessagueQueue.fifo",
+                "Condition": {
+                    "ArnLike": {
+                        "aws:SourceArn": "arn:aws:sns:us-east-1:579749734588:chat-messages.fifo"
+                    }
+                }
+            }
+        ]
+    }
+}
